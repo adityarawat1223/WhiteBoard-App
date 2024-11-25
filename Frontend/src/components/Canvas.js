@@ -6,7 +6,6 @@ const Canvas = forwardRef(({ tool, color, thickness }, ref) => {
   const isDrawingRef = useRef(false);
   const startPos = useRef({ x: 0, y: 0 });
   const currentRect = useRef(null); // Stores the current rectangle being drawn
-
   const undoStack = useRef([]);
   const redoStack = useRef([]);
   const textToAdd = useRef(null);
@@ -111,11 +110,13 @@ const Canvas = forwardRef(({ tool, color, thickness }, ref) => {
   };
 
   const handleMouseMove = (e) => {
+    e.preventDefault();
+
     if (!isDrawingRef.current) return;
 
     const ctx = ctxRef.current;
     const { offsetX, offsetY } = e.nativeEvent;
-    const { x, y } = startPos.current;
+    // const { x, y } = startPos.current;
 
     ctx.lineWidth = thickness;
 
@@ -129,6 +130,7 @@ const Canvas = forwardRef(({ tool, color, thickness }, ref) => {
       ctx.stroke();
       ctx.globalCompositeOperation = 'source-over'; // Restore to draw mode
     } else if (tool === 'rect' && currentRect.current) {
+
       // Save the current canvas state before drawing the rectangle
       restoreState(undoStack.current); // Restore previous drawings
 
@@ -137,10 +139,10 @@ const Canvas = forwardRef(({ tool, color, thickness }, ref) => {
       currentRect.current.height = offsetY - currentRect.current.y;
 
       // Redraw the entire canvas before drawing the rectangle
-      ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      // ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
 
       // Draw previous elements (pen, eraser, text) after clearing the rectangle area
-      restoreState(undoStack.current);
+      // restoreState(undoStack.current);
 
       // Draw the current rectangle
       ctx.strokeStyle = color;
