@@ -25,6 +25,9 @@ const io = new Server(server, {
   },
 });
 
+// Store session data and drawing states
+const sessions = new Map();
+
 io.on("connection", (socket) => {
   console.log("A user connected");
 
@@ -32,14 +35,35 @@ io.on("connection", (socket) => {
   socket.on("joinSession", ({ sessionId }) => {
     socket.join(sessionId);
     console.log(`User joined session: ${sessionId}`);
+
+    // Initialize session data if it doesn't exist
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, {
+        actions: [],
+        undoStack: [],
+        redoStack: [],
+      });
+    }
+
+    // Send the full canvas state to the new user
+    const session = sessions.get(sessionId);
+    socket.emit("loadCanvas", session.actions);
   });
 
   // Handle drawing event (scoped to session)
   socket.on("draw", ({ sessionId, xPercent, yPercent, color, size, type }) => {
     console.log(`Draw in session ${sessionId} by ${socket.id}`);
-    socket
-      .to(sessionId)
-      .emit("draw", { xPercent, yPercent, color, size, type });
+    const action = { xPercent, yPercent, color, size, type };
+    
+    // Store the action in the session
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.actions.push(action); // Save action
+      session.undoStack.push(action); // Save to undo stack
+    }
+
+    // Broadcast the drawing action to other users in the session
+    socket.to(sessionId).emit("draw", action);
   });
 
   // Handle begin path event (scoped to session)
@@ -49,29 +73,43 @@ io.on("connection", (socket) => {
 
   // Handle clear event (scoped to session)
   socket.on("clear", ({ sessionId }) => {
+    const session = sessions.get(sessionId);
+    if (session) {
+      session.actions = []; // Clear actions
+      session.undoStack = []; // Clear undo stack
+      session.redoStack = []; // Clear redo stack
+    }
     socket.to(sessionId).emit("clear");
   });
 
+  // Handle undo event (scoped to session)
+  socket.on("undo", ({ sessionId }) => {
+    const session = sessions.get(sessionId);
+    if (session && session.undoStack.length > 0) {
+      const action = session.undoStack.pop(); // Pop the last action
+      session.redoStack.push(action); // Push to redo stack
+      socket.to(sessionId).emit("updateDrawingState", { undoStack: session.undoStack });
+    }
+  });
+
+  // Handle redo event (scoped to session)
+  socket.on("redo", ({ sessionId }) => {
+    const session = sessions.get(sessionId);
+    if (session && session.redoStack.length > 0) {
+      const action = session.redoStack.pop(); // Pop the last redo action
+      session.undoStack.push(action); // Push to undo stack
+      socket.to(sessionId).emit("updateDrawingState", { undoStack: session.undoStack });
+    }
+  });
+
+  // Handle message sending in chat
+  socket.on("sendMessage", ({ sessionId, message }) => {
+    io.to(sessionId).emit("receiveMessage", { message });
+  });
+
+  // Handle disconnection
   socket.on("disconnect", () => {
     console.log("A user disconnected");
-  });
-  socket.on("undo", (data) => {
-    const { sessionId, historyIndex, state } = data;
-
-    // Broadcast the undo action to other users
-    socket.to(sessionId).emit("updateDrawingState", { historyIndex, state });
-  });
-
-  socket.on("redo", (data) => {
-    const { sessionId, historyIndex, state } = data;
-
-    // Broadcast the redo action to other users
-    socket.to(sessionId).emit("updateDrawingState", { historyIndex, state });
-  });
-  socket.on("sendMessage", (data) => {
-    const { sessionId, message } = data;
-    // Broadcast the message to everyone in the session
-    io.to(sessionId).emit("receiveMessage", { message });
   });
 });
 

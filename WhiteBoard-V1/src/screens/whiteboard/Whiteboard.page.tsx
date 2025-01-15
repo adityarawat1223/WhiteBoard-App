@@ -14,7 +14,7 @@ export const Whiteboard = () => {
   const [brushSize, setBrushSize] = useState(5);
   const [pencilType, setPencilType] = useState("normal");
   const [text, setText] = useState("");
-  
+
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<string[]>([]);
 
@@ -29,17 +29,17 @@ export const Whiteboard = () => {
     }
   };
 
-  useEffect(() => {
-    socket.on("receiveMessage", (data) => {
-      console.log("Received message:", data.message);  // Debug log
+  // useEffect(() => {
+  //   socket.on("receiveMessage", (data) => {
+  //     console.log("Received message:", data.message);  // Debug log
 
-      setMessages((prevMessages) => [...prevMessages, data.message]);
-    });
+  //     setMessages((prevMessages) => [...prevMessages, data.message]);
+  //   });
 
-    return () => {
-      socket.off("receiveMessage");
-    };
-  }, []);
+  //   return () => {
+  //     socket.off("receiveMessage");
+  //   };
+  // }, []);
   const setDrawingStyles = (ctx: CanvasRenderingContext2D) => {
     ctx.lineWidth = brushSize;
     ctx.lineCap = "round";
@@ -61,55 +61,7 @@ export const Whiteboard = () => {
 
   const [drawingHistory, setDrawingHistory] = useState<string[]>([]);
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState<number>(0);
-  
-  const addToHistory = (canvas: HTMLCanvasElement) => {
-    const newHistory = [...drawingHistory];
-    newHistory.push(canvas.toDataURL());  // canvas.toDataURL() returns a string
-    setDrawingHistory(newHistory);  // Update the history array
-    setCurrentHistoryIndex(newHistory.length - 1);  // Set the new current index to the last item in the history
-  };
 
-  const undo = (canvas: HTMLCanvasElement) => {
-    if (currentHistoryIndex > 0) {
-      setCurrentHistoryIndex(currentHistoryIndex - 1);
-      const prevState = drawingHistory[currentHistoryIndex - 1];
-      const ctx = canvas.getContext("2d");
-      const img = new Image();
-      img.onload = () => {
-        ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        ctx?.drawImage(img, 0, 0);
-      };
-      img.src = prevState;
-
-      // Emit the undo action to the server
-      socket.emit("undo", {
-        sessionId,
-        historyIndex: currentHistoryIndex - 1,
-        state: prevState,
-      });
-    }
-  };
-
-  const redo = (canvas: HTMLCanvasElement) => {
-    if (currentHistoryIndex < drawingHistory.length - 1) {
-      setCurrentHistoryIndex(currentHistoryIndex + 1);
-      const nextState = drawingHistory[currentHistoryIndex + 1];
-      const ctx = canvas.getContext("2d");
-      const img = new Image();
-      img.onload = () => {
-        ctx?.clearRect(0, 0, canvas.width, canvas.height);
-        ctx?.drawImage(img, 0, 0);
-      };
-      img.src = nextState;
-
-      // Emit the redo action to the server
-      socket.emit("redo", {
-        sessionId,
-        historyIndex: currentHistoryIndex + 1,
-        state: nextState,
-      });
-    }
-  };
 
 
   const exportCanvas = (canvas: HTMLCanvasElement) => {
@@ -150,6 +102,7 @@ export const Whiteboard = () => {
       if (!drawing) return;
       const xPercent = (e.clientX - canvas.offsetLeft) / canvas.width;
       const yPercent = (e.clientY - canvas.offsetTop) / canvas.height;
+      console.log(xPercent);
       setDrawingStyles(context);
       const x = xPercent * canvas.width;
       const y = yPercent * canvas.height;
@@ -171,14 +124,24 @@ export const Whiteboard = () => {
       context.closePath();
       addToHistory(canvas);
     };
+
+    const addToHistory = (canvas: HTMLCanvasElement) => {
+      const dataUrl = canvas.toDataURL(); // Capture the current canvas state as a data URL (base64 image)
+      setDrawingHistory((prevHistory) => {
+        const newHistory = [...prevHistory];
+        newHistory.push(dataUrl);
+        return newHistory;
+      });
+      setCurrentHistoryIndex((prevIndex) => prevIndex + 1);
+    };
+
     socket.on("updateDrawingState", (data) => {
-      const { state } = data;
+      const { historyIndex, state } = data;
+      setCurrentHistoryIndex(historyIndex);
+
       const canvas = canvasRef.current;
-    
-      // Check if canvas is not null before proceeding
       if (canvas) {
         const ctx = canvas.getContext("2d");
-    
         const img = new Image();
         img.onload = () => {
           if (ctx) {
@@ -187,9 +150,15 @@ export const Whiteboard = () => {
           }
         };
         img.src = state;
+
+        // Update local drawing history
+        setDrawingHistory((prev) => {
+          const updatedHistory = [...prev];
+          updatedHistory[historyIndex] = state;
+          return updatedHistory;
+        });
       }
     });
-    
 
     socket.on("draw", (data) => {
       const { xPercent, yPercent, color, size } = data;
@@ -202,6 +171,8 @@ export const Whiteboard = () => {
       context.stroke();
     });
 
+   
+
     socket.on("clear", () => {
       context.clearRect(0, 0, canvas.width, canvas.height);
     });
@@ -210,20 +181,108 @@ export const Whiteboard = () => {
       context.beginPath();
     });
 
+
+
     canvas.addEventListener("mousedown", handleMouseDown);
     canvas.addEventListener("mousemove", handleMouseMove);
     canvas.addEventListener("mouseup", handleMouseUp);
 
     return () => {
+      console.log("Cleanup called");
+
       socket.off("draw");
       socket.off("clear");
       socket.off("beginPath");
+      socket.off("loadCanvas")
       canvas.removeEventListener("mousedown", handleMouseDown);
       canvas.removeEventListener("mousemove", handleMouseMove);
       canvas.removeEventListener("mouseup", handleMouseUp);
     };
   }, [drawing, color, brushSize, pencilType]);
 
+  useEffect(() => {
+    if (!sessionId) return; // Ensure sessionId is available
+
+    const canvas = canvasRef.current;
+    if (!canvas) return; // Ensure canvas element is present
+
+    const context = canvas.getContext("2d");
+    if (!context) return; // Ensure the canvas context is valid
+
+    // Attach loadCanvas listener
+    socket.on("loadCanvas", (data: Record<string, { xPercent: number; yPercent: number; color: string; size: number; type: string }>) => {
+      console.log("Canvas loaded with data:", data);
+
+      // Iterate over the received drawing actions and render them
+      Object.values(data).forEach((action) => {
+        const { xPercent, yPercent, color, size } = action;
+
+        // Adjust drawing styles
+        context.strokeStyle = color;
+        context.lineWidth = size;
+
+        // Compute actual canvas coordinates
+        const x = xPercent * canvas.width;
+        const y = yPercent * canvas.height;
+
+        context.lineTo(x, y);
+        context.stroke();
+      });
+
+      context.beginPath(); // Reset path after loading data
+    });
+
+    // Cleanup the listener on unmount or session change
+    return () => {
+      socket.off("loadCanvas"); // Remove only the loadCanvas listener
+    };
+  }, [sessionId]);
+
+  const handleUndo = () => {
+    if (currentHistoryIndex > 0) {
+      const prevHistoryIndex = currentHistoryIndex - 1;
+      const prevState = drawingHistory[prevHistoryIndex];
+      setCurrentHistoryIndex(prevHistoryIndex);
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+        img.onload = () => {
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+          }
+        };
+        img.src = prevState;
+      }
+
+      socket.emit("undo", { sessionId, historyIndex: prevHistoryIndex, state: prevState });
+    }
+  };
+
+  const handleRedo = () => {
+    if (currentHistoryIndex < drawingHistory.length - 1) {
+      const nextHistoryIndex = currentHistoryIndex + 1;
+      const nextState = drawingHistory[nextHistoryIndex];
+      setCurrentHistoryIndex(nextHistoryIndex);
+
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        const img = new Image();
+        img.onload = () => {
+          if (ctx) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+          }
+        };
+        img.src = nextState;
+      }
+
+      socket.emit("redo", { sessionId, historyIndex: nextHistoryIndex, state: nextState });
+    }
+  };
   const handleColorChange = (newColor: { hex: React.SetStateAction<string> }) => {
     setColor(newColor.hex);
   };
@@ -257,12 +316,12 @@ export const Whiteboard = () => {
             <CircleColorPicker color={color} onColorChange={handleColorChange} />
           </div>
           <div>
-            {/* <Button onClick={() => undo(canvasRef.current!)} style={{ marginBottom: '10px' }}>
+            <Button onClick={handleUndo}>
               Undo
             </Button>
-            <Button onClick={() => redo(canvasRef.current!)} style={{ marginBottom: '10px' }}>
+            <Button onClick={handleRedo}>
               Redo
-            </Button> */}
+            </Button>
             <Button onClick={() => exportCanvas(canvasRef.current!)} style={{ marginBottom: '10px' }}>
               Export
             </Button>
@@ -292,7 +351,7 @@ export const Whiteboard = () => {
           />
         </div>
         <div className="absolute right-5">
-        <div className="border border-slate-50 shadow-lg p-6 rounded-2xl">
+          <div className="border border-slate-50 shadow-lg p-6 rounded-2xl">
             <Typography.Title level={5} className="!text-gray-500 !font-normal !mb-4">
               Brush Size
             </Typography.Title>
